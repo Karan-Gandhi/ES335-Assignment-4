@@ -12,6 +12,7 @@ import time
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import RandomRotation, RandomHorizontalFlip, RandomResizedCrop, ColorJitter
 import random
+import pandas as pd
 
 # Set fixed seed for reproducibility
 def set_seed(seed=0):
@@ -192,6 +193,25 @@ class MLPModel(nn.Module):
         return self.layers(x)
 
 
+# Function to log images and predictions to TensorBoard
+def log_images_to_tensorboard(writer, model, test_loader, device, epoch):
+    model.eval()
+    with torch.no_grad():
+        for i, (images, labels) in enumerate(test_loader):
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            predicted = (outputs > 0.5).float()
+            writer.add_images(f'Test Images Epoch {epoch}', images, epoch)
+            writer.add_text(f'Predictions Epoch {epoch}', str(predicted.squeeze().cpu().numpy()), epoch)
+            writer.add_text(f'Labels Epoch {epoch}', str(labels.cpu().numpy()), epoch)
+            break  # Log only the first batch of images
+
+# Function to create a table with model performance metrics
+def create_performance_table(results):
+    df = pd.DataFrame(results, columns=['Model', 'Training Time', 'Training Loss', 'Training Accuracy', 'Testing Accuracy', 'Number of Parameters'])
+    df.to_csv('model_performance.csv', index=False)
+    print(df)
+
 # Training function
 def train_and_evaluate_model(model, train_loader, test_loader, model_name, num_epochs=20, device='cuda'):
     writer = SummaryWriter(f'runs/{model_name}_{time.time()}')
@@ -225,14 +245,8 @@ def train_and_evaluate_model(model, train_loader, test_loader, model_name, num_e
             total += labels.size(0)
             correct += (predicted.squeeze() == labels).sum().item()
 
-            if i % 10 == 9:
-                writer.add_scalar('training loss',
-                                  running_loss / 10,
-                                  epoch * len(train_loader) + i)
-                writer.add_scalar('training accuracy',
-                                  100 * correct / total,
-                                  epoch * len(train_loader) + i)
-                running_loss = 0.0
+            writer.add_scalar('training loss', running_loss / (i + 1), epoch * len(train_loader) + i)
+            writer.add_scalar('training accuracy', 100 * correct / total, epoch * len(train_loader) + i)
 
         # Evaluate on test set
         model.eval()
@@ -258,16 +272,22 @@ def train_and_evaluate_model(model, train_loader, test_loader, model_name, num_e
         history['val_loss'].append(test_loss / len(test_loader))
         history['val_accuracy'].append(test_acc)
 
+        log_images_to_tensorboard(writer, model, test_loader, device, epoch)
+
         print(f'Epoch {epoch+1}/{num_epochs}')
         print(f'Test Accuracy: {test_acc:.2f}%')
 
     end_time = time.time()
-    print(f'Training completed in {end_time - start_time:.2f} seconds')
+    training_time = end_time - start_time
+    print(f'Training completed in {training_time:.2f} seconds')
 
     # Save the model
     torch.save(model.state_dict(), f'{model_name}.pth')
 
-    return model, history
+    # Log model parameters
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    return model, history, training_time, num_params
 
 # Function to plot training history
 def plot_history(history, model_name):
@@ -306,41 +326,51 @@ def get_data_loaders(batch_size=32, augment=False):
 # Training different models
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    results = []
 
     # Train VGG1
     train_loader, test_loader = get_data_loaders()
     vgg1_model = VGG1()
-    vgg1_model, history = train_and_evaluate_model(
+    vgg1_model, history, training_time, num_params = train_and_evaluate_model(
         vgg1_model, train_loader, test_loader, "VGG1", device=device)
     plot_history(history, "VGG1")
+    results.append(["VGG1", training_time, history['loss'][-1], history['accuracy'][-1], history['val_accuracy'][-1], num_params])
 
     # Train VGG3 without augmentation
     vgg3_model = VGG3()
-    vgg3_model, history = train_and_evaluate_model(
+    vgg3_model, history, training_time, num_params = train_and_evaluate_model(
         vgg3_model, train_loader, test_loader, "VGG3_no_aug", device=device)
     plot_history(history, "VGG3_no_aug")
+    results.append(["VGG3_no_aug", training_time, history['loss'][-1], history['accuracy'][-1], history['val_accuracy'][-1], num_params])
 
     # Train VGG3 with augmentation
     train_loader_aug, test_loader = get_data_loaders(augment=True)
     vgg3_aug_model = VGG3()
-    vgg3_aug_model, history = train_and_evaluate_model(
+    vgg3_aug_model, history, training_time, num_params = train_and_evaluate_model(
         vgg3_aug_model, train_loader_aug, test_loader, "VGG3_aug", device=device)
     plot_history(history, "VGG3_aug")
+    results.append(["VGG3_aug", training_time, history['loss'][-1], history['accuracy'][-1], history['val_accuracy'][-1], num_params])
 
     # Train VGG16 with all layers tuned
     vgg16_all_layers = VGG16Transfer(tune_all_layers=True)
-    vgg16_all_layers, history = train_and_evaluate_model(
+    vgg16_all_layers, history, training_time, num_params = train_and_evaluate_model(
         vgg16_all_layers, train_loader, test_loader, "VGG16_all_layers", device=device)
     plot_history(history, "VGG16_all_layers")
+    results.append(["VGG16_all_layers", training_time, history['loss'][-1], history['accuracy'][-1], history['val_accuracy'][-1], num_params])
 
     # Train VGG16 with only MLP layers tuned
     vgg16_mlp = VGG16Transfer(tune_all_layers=False)
-    vgg16_mlp, history = train_and_evaluate_model(
+    vgg16_mlp, history, training_time, num_params = train_and_evaluate_model(
         vgg16_mlp, train_loader, test_loader, "VGG16_mlp", device=device)
     plot_history(history, "VGG16_mlp")
+    results.append(["VGG16_mlp", training_time, history['loss'][-1], history['accuracy'][-1], history['val_accuracy'][-1], num_params])
 
     # Train MLP model
     mlp_model = MLPModel()
-    mlp_model, history = train_and_evaluate_model(
+    mlp_model, history, training_time, num_params = train_and_evaluate_model(
         mlp_model, train_loader, test_loader, "MLP", device=device)
     plot_history(history, "MLP")
+    results.append(["MLP", training_time, history['loss'][-1], history['accuracy'][-1], history['val_accuracy'][-1], num_params])
+
+    # Create performance table
+    create_performance_table(results)
