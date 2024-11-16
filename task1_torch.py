@@ -153,7 +153,7 @@ class VGG3(nn.Module):
 class VGG16Transfer(nn.Module):
     def __init__(self, tune_all_layers=False):
         super(VGG16Transfer, self).__init__()
-        self.vgg16 = models.vgg16(pretrained=True)
+        self.vgg16 = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
 
         # Freeze or unfreeze layers based on parameter
         for param in self.vgg16.parameters():
@@ -181,9 +181,15 @@ class MLPModel(nn.Module):
         self.layers = nn.Sequential(
             nn.Linear(256 * 256 * 3, 828),
             nn.ReLU(),
-            *[nn.Sequential(nn.Linear(512, 512), nn.ReLU()) for _ in range(8)],
-            *[nn.Sequential(nn.Linear(256, 256), nn.ReLU()) for _ in range(3)],
-            *[nn.Sequential(nn.Linear(128, 128), nn.ReLU()) for _ in range(3)],
+            nn.Linear(828, 512),
+            nn.ReLU(),
+            *[nn.Sequential(nn.Linear(512, 512), nn.ReLU()) for _ in range(7)],
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            *[nn.Sequential(nn.Linear(256, 256), nn.ReLU()) for _ in range(2)],
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            *[nn.Sequential(nn.Linear(128, 128), nn.ReLU()) for _ in range(2)],
             nn.Linear(128, 1),
             nn.Sigmoid()
         )
@@ -281,8 +287,8 @@ def train_and_evaluate_model(model, train_loader, test_loader, model_name, num_e
     training_time = end_time - start_time
     print(f'Training completed in {training_time:.2f} seconds')
 
-    # Save the model
-    torch.save(model.state_dict(), f'{model_name}.pth')
+    # # Save the model
+    # torch.save(model.state_dict(), f'{model_name}.pth')
 
     # Log model parameters
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
